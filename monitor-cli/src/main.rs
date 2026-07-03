@@ -7,23 +7,24 @@ use std::time::Duration;
 use anyhow::Result;
 use chrono::DateTime;
 use crossterm::event::{self, Event as CEvent, KeyCode};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Borders, Paragraph, Row, Table, Clear};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Row, Table};
 use ratatui::Terminal;
 use serde::Deserialize;
 
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as TokioBufReader};
 use tokio::net::windows::named_pipe::ClientOptions;
-use tokio::io::{AsyncWriteExt, AsyncBufReadExt, BufReader as TokioBufReader};
 
 use windows_sys::Win32::System::Services::{
-    CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatusEx,
-    SC_MANAGER_CONNECT, SC_STATUS_PROCESS_INFO, SERVICE_QUERY_STATUS, SERVICE_RUNNING,
-    SERVICE_STATUS_PROCESS, SERVICE_STOPPED, SERVICE_PAUSED, SERVICE_START_PENDING,
-    SERVICE_STOP_PENDING,
+    CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatusEx, SC_MANAGER_CONNECT,
+    SC_STATUS_PROCESS_INFO, SERVICE_PAUSED, SERVICE_QUERY_STATUS, SERVICE_RUNNING,
+    SERVICE_START_PENDING, SERVICE_STATUS_PROCESS, SERVICE_STOPPED, SERVICE_STOP_PENDING,
 };
 
 #[derive(Deserialize, Clone, Debug)]
@@ -209,13 +210,13 @@ async fn query_live_status() -> Result<String> {
     let pipe_name = r"\\.\pipe\CoreAdminPipe";
     let client = ClientOptions::new().open(pipe_name)?;
     let mut reader = TokioBufReader::new(client);
-    
+
     reader.get_mut().write_all(b"STATUS\n").await?;
     reader.get_mut().flush().await?;
-    
+
     let mut response = String::new();
     reader.read_line(&mut response).await?;
-    
+
     let trimmed = response.trim();
     if trimmed.starts_with("STATE: ") {
         Ok(trimmed["STATE: ".len()..].to_uppercase())
@@ -228,11 +229,11 @@ async fn send_suspend_command(password: &str) -> Result<String> {
     let pipe_name = r"\\.\pipe\CoreAdminPipe";
     let client = ClientOptions::new().open(pipe_name)?;
     let mut reader = TokioBufReader::new(client);
-    
+
     let cmd = format!("SUSPEND {}\n", password);
     reader.get_mut().write_all(cmd.as_bytes()).await?;
     reader.get_mut().flush().await?;
-    
+
     let mut response = String::new();
     reader.read_line(&mut response).await?;
     Ok(response.trim().to_string())
@@ -242,11 +243,11 @@ async fn send_resume_command(password: &str) -> Result<String> {
     let pipe_name = r"\\.\pipe\CoreAdminPipe";
     let client = ClientOptions::new().open(pipe_name)?;
     let mut reader = TokioBufReader::new(client);
-    
+
     let cmd = format!("RESUME {}\n", password);
     reader.get_mut().write_all(cmd.as_bytes()).await?;
     reader.get_mut().flush().await?;
-    
+
     let mut response = String::new();
     reader.read_line(&mut response).await?;
     Ok(response.trim().to_string())
@@ -256,11 +257,11 @@ async fn send_add_block_command(password: &str, process_name: &str) -> Result<St
     let pipe_name = r"\\.\pipe\CoreAdminPipe";
     let client = ClientOptions::new().open(pipe_name)?;
     let mut reader = TokioBufReader::new(client);
-    
+
     let cmd = format!("ADD_BLOCK {} {}\n", password, process_name);
     reader.get_mut().write_all(cmd.as_bytes()).await?;
     reader.get_mut().flush().await?;
-    
+
     let mut response = String::new();
     reader.read_line(&mut response).await?;
     Ok(response.trim().to_string())
@@ -270,11 +271,11 @@ async fn send_remove_block_command(password: &str, process_name: &str) -> Result
     let pipe_name = r"\\.\pipe\CoreAdminPipe";
     let client = ClientOptions::new().open(pipe_name)?;
     let mut reader = TokioBufReader::new(client);
-    
+
     let cmd = format!("REMOVE_BLOCK {} {}\n", password, process_name);
     reader.get_mut().write_all(cmd.as_bytes()).await?;
     reader.get_mut().flush().await?;
-    
+
     let mut response = String::new();
     reader.read_line(&mut response).await?;
     Ok(response.trim().to_string())
@@ -306,10 +307,21 @@ fn translate_event(category: &str, message: &str) -> (String, String) {
     };
 
     let msg_ru = if category == "process_blocked" {
-        if let Some(pos) = message.find("Blocked process: ") {
-            format!("Заблокирован запуск процесса: {}", &message[pos + "Blocked process: ".len()..])
+        if let Some(pos) = message.to_lowercase().find("blocked forbidden process: ") {
+            format!(
+                "Заблокирован запуск процесса: {}",
+                &message[pos + "blocked forbidden process: ".len()..]
+            )
+        } else if let Some(pos) = message.find("Blocked process: ") {
+            format!(
+                "Заблокирован запуск процесса: {}",
+                &message[pos + "Blocked process: ".len()..]
+            )
         } else if let Some(pos) = message.find("Blocked process ") {
-            format!("Заблокирован запуск процесса: {}", &message[pos + "Blocked process ".len()..])
+            format!(
+                "Заблокирован запуск процесса: {}",
+                &message[pos + "Blocked process ".len()..]
+            )
         } else {
             message.to_string()
         }
@@ -324,9 +336,9 @@ fn translate_event(category: &str, message: &str) -> (String, String) {
             message.to_string()
         }
     } else if category == "system_override" || category == "system_status" {
-        if message.contains("suspended") || message.contains("Suspended") {
+        if message.to_lowercase().contains("suspend") {
             "Режим защиты ПРИОСТАНОВЛЕН администратором".to_string()
-        } else if message.contains("resumed") || message.contains("Resumed") {
+        } else if message.to_lowercase().contains("resume") {
             "Режим защиты ВОЗОБНОВЛЕН (активен)".to_string()
         } else {
             message.to_string()
@@ -340,16 +352,31 @@ fn translate_event(category: &str, message: &str) -> (String, String) {
             message.to_string()
         }
     } else if message.starts_with("ADD_BLOCK command received for: ") {
-        format!("Добавлен в список блокировки: {}", &message["ADD_BLOCK command received for: ".len()..])
+        format!(
+            "Добавлен в список блокировки: {}",
+            &message["ADD_BLOCK command received for: ".len()..]
+        )
     } else if message.starts_with("REMOVE_BLOCK command received for: ") {
-        format!("Удален из списка блокировки: {}", &message["REMOVE_BLOCK command received for: ".len()..])
+        format!(
+            "Удален из списка блокировки: {}",
+            &message["REMOVE_BLOCK command received for: ".len()..]
+        )
     } else {
         message
             .replace("Core Service started", "Служба Ядра запущена")
             .replace("Core Service stopped", "Служба Ядра остановлена")
-            .replace("Admin command received: SUSPEND", "Получена команда: ПРИОСТАНОВИТЬ ЗАЩИТУ")
-            .replace("Admin command received: RESUME", "Получена команда: АКТИВИРОВАТЬ ЗАЩИТУ")
-            .replace("Database initialized", "База данных успешно инициализирована")
+            .replace(
+                "Admin command received: SUSPEND",
+                "Получена команда: ПРИОСТАНОВИТЬ ЗАЩИТУ",
+            )
+            .replace(
+                "Admin command received: RESUME",
+                "Получена команда: АКТИВИРОВАТЬ ЗАЩИТУ",
+            )
+            .replace(
+                "Database initialized",
+                "База данных успешно инициализирована",
+            )
     };
 
     (cat_ru.to_string(), msg_ru)
@@ -357,9 +384,45 @@ fn translate_event(category: &str, message: &str) -> (String, String) {
 
 fn format_timestamp(ts: &str) -> String {
     if let Ok(dt) = DateTime::parse_from_rfc3339(ts) {
-        dt.with_timezone(&chrono::Local).format("%H:%M:%S").to_string()
+        dt.with_timezone(&chrono::Local)
+            .format("%H:%M:%S")
+            .to_string()
     } else {
         ts.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_translate_status() {
+        assert_eq!(translate_status("RUNNING"), "ЗАПУЩЕНО");
+        assert_eq!(translate_status("NOT INSTALLED"), "НЕ УСТАНОВЛЕНА");
+        assert_eq!(translate_status("STOPPED"), "ОСТАНОВЛЕНО");
+        assert_eq!(translate_status("SUSPENDED"), "ПРИОСТАНОВЛЕН");
+        assert_eq!(translate_status("UNKNOWN"), "UNKNOWN");
+    }
+
+    #[test]
+    fn test_translate_event_system_override() {
+        let (cat, msg) = translate_event(
+            "system_override",
+            "System Suspend successfully activated via master password override.",
+        );
+        assert_eq!(cat, "Управление");
+        assert_eq!(msg, "Режим защиты ПРИОСТАНОВЛЕН администратором");
+    }
+
+    #[test]
+    fn test_translate_event_process_blocked() {
+        let (cat, msg) = translate_event(
+            "process_blocked",
+            "Blocked forbidden process: calc.exe (PID: 1234)",
+        );
+        assert_eq!(cat, "Блокировка");
+        assert_eq!(msg, "Заблокирован запуск процесса: calc.exe (PID: 1234)");
     }
 }
 
@@ -413,16 +476,14 @@ async fn main() -> Result<()> {
     }
 
     // Input loop channel
-    let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<crossterm::event::KeyEvent>(100);
-    
+    let (input_tx, mut input_rx) = tokio::sync::mpsc::channel(100);
+
     // Spawn input polling task
-    tokio::task::spawn_blocking(move || {
-        loop {
-            if event::poll(Duration::from_millis(50)).unwrap_or(false) {
-                if let Ok(CEvent::Key(key)) = event::read() {
-                    if key.kind == crossterm::event::KeyEventKind::Press {
-                        let _ = input_tx.blocking_send(key);
-                    }
+    tokio::task::spawn_blocking(move || loop {
+        if event::poll(Duration::from_millis(50)).unwrap_or(false) {
+            if let Ok(CEvent::Key(key)) = event::read() {
+                if key.kind == crossterm::event::KeyEventKind::Press {
+                    let _ = input_tx.blocking_send(key);
                 }
             }
         }

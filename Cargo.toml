@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "core-service",
+    "watchdog-utility",
+    "monitor-cli",
+    "tray-agent"
+]
+
+[profile.dev]
+debug = 0
+opt-level = 0
+codegen-units = 1
+
+[profile.release]
+debug = 0
+opt-level = 3
+codegen-units = 1
+
+[profile.dev.build-override]
+debug = 0
+opt-level = 0
+codegen-units = 1
+
+[profile.release.build-override]
+debug = 0
+opt-level = 0
+codegen-units = 1

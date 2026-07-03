@@ -1,0 +1,21 @@
+# Rust build artifacts
+/target/
+/.cargo_home/
+
+# OS-specific files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Compiled binaries and logs in root
+/hello.exe
+/hello.pdb
+/test_run.exe
+/test_run.pdb
+/build.log
+/sc_out.txt
+/test.log
+*.bin
+*.exe
+*.pdb
+*.log

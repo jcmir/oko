@@ -5,13 +5,13 @@ echo =======================================================
 
 cd /d "%~dp0"
 
-IF NOT EXIST "target\x86_64-pc-windows-gnu\debug\tray-agent.exe" (
+IF NOT EXIST "target\debug\tray-agent.exe" (
     echo [ERROR] Скомпилированный файл Трей-агента не найден. 
-    echo Пожалуйста, выполните cargo build --target x86_64-pc-windows-gnu
+    echo Пожалуйста, выполните команду: cargo build
     pause
     exit /b 1
 )
 
 echo Запуск tray-agent.exe в фоновом режиме...
-start "" "target\x86_64-pc-windows-gnu\debug\tray-agent.exe"
+start "" "target\debug\tray-agent.exe"
 exit

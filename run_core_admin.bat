@@ -6,13 +6,13 @@ echo =======================================================
 
 cd /d "%~dp0"
 
-IF NOT EXIST "target\x86_64-pc-windows-gnu\debug\core-service.exe" (
+IF NOT EXIST "target\debug\core-service.exe" (
     echo [ERROR] Скомпилированный файл Ядра не найден. 
-    echo Пожалуйста, выполните cargo build --target x86_64-pc-windows-gnu
+    echo Пожалуйста, выполните команду: cargo build
     pause
     exit /b 1
 )
 
 echo Запуск core-service.exe...
-target\x86_64-pc-windows-gnu\debug\core-service.exe
+target\debug\core-service.exe
 pause

@@ -1877,6 +1877,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "lazy_static",
  "rand",
  "serde",
  "serde_json",

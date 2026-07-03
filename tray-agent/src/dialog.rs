@@ -17,8 +17,13 @@ extern "system" {
     pub fn UpdateWindow(hwnd: HWND) -> BOOL;
 }
 
-static mut PASSWORD_RESULT: Option<String> = None;
-static mut IS_CONFIRMED: bool = false;
+use std::sync::Mutex;
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref PASSWORD_RESULT: Mutex<Option<String>> = Mutex::new(None);
+    static ref IS_CONFIRMED: Mutex<bool> = Mutex::new(false);
+}
 
 unsafe extern "system" fn dialog_window_proc(
     hwnd: HWND,
@@ -109,20 +114,22 @@ unsafe extern "system" fn dialog_window_proc(
                 if len > 0 {
                     buffer.truncate(len as usize);
                     if let Ok(pwd) = String::from_utf16(&buffer) {
-                        PASSWORD_RESULT = Some(pwd);
-                        IS_CONFIRMED = true;
+                        *PASSWORD_RESULT.lock().unwrap() = Some(pwd);
+                        *IS_CONFIRMED.lock().unwrap() = true;
                     }
                 } else {
-                    PASSWORD_RESULT = Some(String::new());
-                    IS_CONFIRMED = true;
+                    *PASSWORD_RESULT.lock().unwrap() = Some(String::new());
+                    *IS_CONFIRMED.lock().unwrap() = true;
                 }
                 DestroyWindow(hwnd);
             } else if id == 2 {
                 // Cancel clicked
+                *IS_CONFIRMED.lock().unwrap() = false;
                 DestroyWindow(hwnd);
             }
         }
         WM_CLOSE => {
+            *IS_CONFIRMED.lock().unwrap() = false;
             DestroyWindow(hwnd);
         }
         WM_DESTROY => {
@@ -135,8 +142,8 @@ unsafe extern "system" fn dialog_window_proc(
 
 pub fn show_password_dialog(title: &str, prompt: &str) -> Option<String> {
     unsafe {
-        PASSWORD_RESULT = None;
-        IS_CONFIRMED = false;
+        *PASSWORD_RESULT.lock().unwrap() = None;
+        *IS_CONFIRMED.lock().unwrap() = false;
 
         let hinstance = GetModuleHandleW(null_mut());
 
@@ -202,8 +209,8 @@ pub fn show_password_dialog(title: &str, prompt: &str) -> Option<String> {
             DispatchMessageW(&msg);
         }
 
-        if IS_CONFIRMED {
-            PASSWORD_RESULT.clone()
+        if *IS_CONFIRMED.lock().unwrap() {
+            PASSWORD_RESULT.lock().unwrap().clone()
         } else {
             None
         }

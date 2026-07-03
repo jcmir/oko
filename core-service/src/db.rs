@@ -1,16 +1,14 @@
 use rusqlite::{params, Connection};
-use sha2::{Sha256, Digest};
-use std::fs;
+use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
+use std::fs;
 use std::os::windows::ffi::OsStrExt;
-use std::sync::Mutex;
 use std::path::Path;
+use std::sync::Mutex;
 
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
-use windows_sys::Win32::Security::{
-    SetFileSecurityW, DACL_SECURITY_INFORMATION,
-};
+use windows_sys::Win32::Security::{SetFileSecurityW, DACL_SECURITY_INFORMATION};
 
 const SDDL_REVISION_1: u32 = 1;
 
@@ -20,7 +18,7 @@ fn to_wide_string(s: &str) -> Vec<u16> {
 
 pub fn secure_directory_acl(path: &str) -> Result<(), anyhow::Error> {
     let wide_path = to_wide_string(path);
-    
+
     // SDDL Configuration with inheritance:
     // D: -> DACL header
     // (A;OICI;GA;;;SY) -> Allow Generic All (GA) to SYSTEM (SY), Object Inherit (OI), Container Inherit (CI)
@@ -28,7 +26,7 @@ pub fn secure_directory_acl(path: &str) -> Result<(), anyhow::Error> {
     let sddl = to_wide_string("D:(A;OICI;GA;;;SY)(A;OICI;GA;;;BA)");
     let mut sd_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
     let mut sd_size: u32 = 0;
-    
+
     unsafe {
         let res = ConvertStringSecurityDescriptorToSecurityDescriptorW(
             sddl.as_ptr(),
@@ -37,23 +35,25 @@ pub fn secure_directory_acl(path: &str) -> Result<(), anyhow::Error> {
             &mut sd_size,
         );
         if res == 0 {
-            return Err(anyhow::anyhow!("Failed to convert SDDL to security descriptor: {}", GetLastError()));
+            return Err(anyhow::anyhow!(
+                "Failed to convert SDDL to security descriptor: {}",
+                GetLastError()
+            ));
         }
-        
+
         let security_info = DACL_SECURITY_INFORMATION;
-        let set_res = SetFileSecurityW(
-            wide_path.as_ptr(),
-            security_info,
-            sd_ptr,
-        );
-        
+        let set_res = SetFileSecurityW(wide_path.as_ptr(), security_info, sd_ptr);
+
         LocalFree(sd_ptr);
-        
+
         if set_res == 0 {
-            return Err(anyhow::anyhow!("Failed to set directory security descriptor: {}", GetLastError()));
+            return Err(anyhow::anyhow!(
+                "Failed to set directory security descriptor: {}",
+                GetLastError()
+            ));
         }
     }
-    
+
     Ok(())
 }
 
@@ -64,7 +64,7 @@ pub struct Db {
 impl Db {
     pub fn new() -> Result<Self, anyhow::Error> {
         let dir = r"C:\ProgramData\MonitoringControl";
-        
+
         // If directory does not exist, create it and secure it
         if !Path::new(dir).exists() {
             fs::create_dir_all(dir)?;
@@ -72,20 +72,25 @@ impl Db {
                 eprintln!("Warning: failed to secure directory ACL: {}", e);
             }
         }
-        
+
         let db_path = format!(r"{}\parental_control.db", dir);
-        
+
         // Open or create database (it will inherit the parent directory's DACL)
         let conn = Connection::open(&db_path)?;
-        
-        let db = Db { conn: Mutex::new(conn) };
+
+        let db = Db {
+            conn: Mutex::new(conn),
+        };
         db.init()?;
-        
+
         Ok(db)
     }
-    
+
     fn init(&self) -> Result<(), anyhow::Error> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("DB lock error: {}", e))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("DB lock error: {}", e))?;
         conn.execute(
             "CREATE TABLE IF NOT EXISTS config (
                 key TEXT PRIMARY KEY,
@@ -99,12 +104,10 @@ impl Db {
             )",
             [],
         )?;
-        
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM blocked_processes",
-            [],
-            |row| row.get(0),
-        )?;
+
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM blocked_processes", [], |row| {
+            row.get(0)
+        })?;
         if count == 0 {
             for default_proc in &["calc.exe", "notepad.exe", "mspaint.exe"] {
                 conn.execute(
@@ -115,9 +118,12 @@ impl Db {
         }
         Ok(())
     }
-    
+
     pub fn add_blocked_process(&self, name: &str) -> Result<(), anyhow::Error> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("DB lock error: {}", e))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("DB lock error: {}", e))?;
         conn.execute(
             "INSERT OR IGNORE INTO blocked_processes (name) VALUES (?1)",
             [name],
@@ -126,37 +132,41 @@ impl Db {
     }
 
     pub fn remove_blocked_process(&self, name: &str) -> Result<(), anyhow::Error> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("DB lock error: {}", e))?;
-        conn.execute(
-            "DELETE FROM blocked_processes WHERE name = ?1",
-            [name],
-        )?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("DB lock error: {}", e))?;
+        conn.execute("DELETE FROM blocked_processes WHERE name = ?1", [name])?;
         Ok(())
     }
 
     pub fn get_blocked_processes(&self) -> Result<Vec<String>, anyhow::Error> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("DB lock error: {}", e))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("DB lock error: {}", e))?;
         let mut stmt = conn.prepare("SELECT name FROM blocked_processes")?;
         let rows = stmt.query_map([], |row| row.get(0))?;
         let mut list = Vec::new();
-        for r in rows {
-            if let Ok(name) = r {
-                list.push(name);
-            }
+        for name in rows.flatten() {
+            list.push(name);
         }
         Ok(list)
     }
-    
+
     pub fn set_master_password(&self, password: &str) -> Result<(), anyhow::Error> {
         let hash = self.hash_password(password);
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("DB lock error: {}", e))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("DB lock error: {}", e))?;
         conn.execute(
             "INSERT OR REPLACE INTO config (key, value) VALUES ('master_password', ?1)",
             params![hash],
         )?;
         Ok(())
     }
-    
+
     pub fn verify_password(&self, password: &str) -> bool {
         let hash = self.hash_password(password);
         let conn_guard = match self.conn.lock() {
@@ -168,13 +178,13 @@ impl Db {
             [],
             |row| row.get(0),
         );
-        
+
         match stored_hash {
             Ok(stored) => stored == hash,
             Err(_) => false,
         }
     }
-    
+
     #[allow(dead_code)]
     pub fn verify_hash(&self, hash_to_check: &str) -> bool {
         let conn_guard = match self.conn.lock() {
@@ -186,13 +196,13 @@ impl Db {
             [],
             |row| row.get(0),
         );
-        
+
         match stored_hash {
             Ok(stored) => stored.trim().eq_ignore_ascii_case(hash_to_check.trim()),
             Err(_) => false,
         }
     }
-    
+
     fn hash_password(&self, password: &str) -> String {
         let mut hasher = Sha256::new();
         hasher.update(password.as_bytes());

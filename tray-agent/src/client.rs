@@ -1,6 +1,6 @@
+use anyhow::{anyhow, Result};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::windows::named_pipe::ClientOptions;
-use tokio::io::{AsyncWriteExt, AsyncBufReadExt, BufReader};
-use anyhow::{Result, anyhow};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SystemStatus {
@@ -33,16 +33,15 @@ impl CoreClient {
     pub async fn query_status(&self) -> Result<SystemStatus> {
         let client = ClientOptions::new().open(&self.pipe_path)?;
         let mut reader = BufReader::new(client);
-        
+
         reader.get_mut().write_all(b"STATUS\n").await?;
         reader.get_mut().flush().await?;
-        
+
         let mut response = String::new();
         reader.read_line(&mut response).await?;
-        
+
         let trimmed = response.trim();
-        if trimmed.starts_with("STATE: ") {
-            let state = &trimmed["STATE: ".len()..];
+        if let Some(state) = trimmed.strip_prefix("STATE: ") {
             if state.eq_ignore_ascii_case("Suspended") {
                 Ok(SystemStatus::Suspended)
             } else {
@@ -56,14 +55,14 @@ impl CoreClient {
     pub async fn send_suspend(&self, password: &str) -> Result<()> {
         let client = ClientOptions::new().open(&self.pipe_path)?;
         let mut reader = BufReader::new(client);
-        
+
         let cmd = format!("SUSPEND {}\n", password);
         reader.get_mut().write_all(cmd.as_bytes()).await?;
         reader.get_mut().flush().await?;
-        
+
         let mut response = String::new();
         reader.read_line(&mut response).await?;
-        
+
         let trimmed = response.trim();
         if trimmed == "OK" {
             Ok(())
@@ -78,14 +77,14 @@ impl CoreClient {
     pub async fn send_resume(&self, password: &str) -> Result<()> {
         let client = ClientOptions::new().open(&self.pipe_path)?;
         let mut reader = BufReader::new(client);
-        
+
         let cmd = format!("RESUME {}\n", password);
         reader.get_mut().write_all(cmd.as_bytes()).await?;
         reader.get_mut().flush().await?;
-        
+
         let mut response = String::new();
         reader.read_line(&mut response).await?;
-        
+
         let trimmed = response.trim();
         if trimmed == "OK" {
             Ok(())

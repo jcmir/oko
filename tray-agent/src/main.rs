@@ -1,16 +1,18 @@
 #![windows_subsystem = "windows"]
 
 mod client;
-mod tray;
 mod dialog;
+mod tray;
 
-use std::path::Path;
-use anyhow::Result;
-use tray_icon::menu::MenuEvent;
-use widestring::U16CString;
-use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_OK, MB_ICONINFORMATION, MB_ICONERROR};
 use crate::client::{CoreClient, SystemStatus};
 use crate::tray::SystemTray;
+use anyhow::Result;
+use std::path::Path;
+use tray_icon::menu::MenuEvent;
+use widestring::U16CString;
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    MessageBoxW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK,
+};
 
 fn get_or_create_machine_id() -> String {
     let path = Path::new(r"C:\ProgramData\MonitoringControl\machine_id.txt");
@@ -22,7 +24,7 @@ fn get_or_create_machine_id() -> String {
             }
         }
     }
-    
+
     // Generate a random ID
     let mut id = String::new();
     use rand::Rng;
@@ -31,10 +33,10 @@ fn get_or_create_machine_id() -> String {
         id.push(rng.sample(rand::distributions::Alphanumeric) as char);
     }
     let full_id = format!("OKO-{}", id.to_uppercase());
-    
+
     let _ = std::fs::create_dir_all(r"C:\ProgramData\MonitoringControl");
     let _ = std::fs::write(path, &full_id);
-    
+
     full_id
 }
 
@@ -42,7 +44,12 @@ fn show_info_box(title: &str, message: &str) {
     unsafe {
         let title_w = U16CString::from_str(title).unwrap();
         let message_w = U16CString::from_str(message).unwrap();
-        MessageBoxW(0, message_w.as_ptr(), title_w.as_ptr(), MB_OK | MB_ICONINFORMATION);
+        MessageBoxW(
+            0,
+            message_w.as_ptr(),
+            title_w.as_ptr(),
+            MB_OK | MB_ICONINFORMATION,
+        );
     }
 }
 
@@ -50,7 +57,12 @@ fn show_error_box(title: &str, message: &str) {
     unsafe {
         let title_w = U16CString::from_str(title).unwrap();
         let message_w = U16CString::from_str(message).unwrap();
-        MessageBoxW(0, message_w.as_ptr(), title_w.as_ptr(), MB_OK | MB_ICONERROR);
+        MessageBoxW(
+            0,
+            message_w.as_ptr(),
+            title_w.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        );
     }
 }
 
@@ -74,7 +86,9 @@ fn main() -> Result<()> {
         // Poll for menu events
         if let Ok(event) = receiver.recv_timeout(std::time::Duration::from_millis(50)) {
             if tray.is_suspend_click(&event.id) {
-                if let Some(pwd) = dialog::show_password_dialog("Приостановка Защиты", "Введите Мастер-Пароль:") {
+                if let Some(pwd) =
+                    dialog::show_password_dialog("Приостановка Защиты", "Введите Мастер-Пароль:")
+                {
                     match rt.block_on(client.send_suspend(&pwd)) {
                         Ok(_) => {
                             show_info_box("Успех", "Защита системы успешно приостановлена.");
@@ -82,12 +96,17 @@ fn main() -> Result<()> {
                             tray.update_status(SystemStatus::Suspended);
                         }
                         Err(e) => {
-                            show_error_box("Ошибка", &format!("Не удалось приостановить защиту:\n{}", e));
+                            show_error_box(
+                                "Ошибка",
+                                &format!("Не удалось приостановить защиту:\n{}", e),
+                            );
                         }
                     }
                 }
             } else if tray.is_resume_click(&event.id) {
-                if let Some(pwd) = dialog::show_password_dialog("Возобновление Защиты", "Введите Мастер-Пароль:") {
+                if let Some(pwd) =
+                    dialog::show_password_dialog("Возобновление Защиты", "Введите Мастер-Пароль:")
+                {
                     match rt.block_on(client.send_resume(&pwd)) {
                         Ok(_) => {
                             show_info_box("Успех", "Защита системы успешно возобновлена.");
@@ -95,7 +114,10 @@ fn main() -> Result<()> {
                             tray.update_status(SystemStatus::Active);
                         }
                         Err(e) => {
-                            show_error_box("Ошибка", &format!("Не удалось возобновить защиту:\n{}", e));
+                            show_error_box(
+                                "Ошибка",
+                                &format!("Не удалось возобновить защиту:\n{}", e),
+                            );
                         }
                     }
                 }

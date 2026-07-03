@@ -1,9 +1,9 @@
 use std::ptr::null_mut;
 use widestring::U16CString;
 use windows_sys::Win32::Foundation::*;
-use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::Win32::Graphics::Gdi::{GetStockObject, DEFAULT_GUI_FONT, HBRUSH};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 const SS_LEFT: u32 = 0x00000000;
 const COLOR_BTNFACE: u32 = 15;
@@ -29,7 +29,7 @@ unsafe extern "system" fn dialog_window_proc(
     match msg {
         WM_CREATE => {
             let hinstance = GetWindowLongPtrW(hwnd, GWLP_HINSTANCE) as HINSTANCE;
-            let hfont = GetStockObject(DEFAULT_GUI_FONT as i32) as WPARAM;
+            let hfont = GetStockObject(DEFAULT_GUI_FONT) as WPARAM;
 
             // Static prompt
             let static_hwnd = CreateWindowExW(
@@ -37,49 +37,61 @@ unsafe extern "system" fn dialog_window_proc(
                 U16CString::from_str("STATIC").unwrap().as_ptr(),
                 null_mut(),
                 WS_CHILD | WS_VISIBLE | SS_LEFT,
-                20, 20, 310, 20,
+                20,
+                20,
+                310,
+                20,
                 hwnd,
                 100,
                 hinstance,
                 null_mut(),
             );
             SendMessageW(static_hwnd, WM_SETFONT, hfont, 1);
-            
+
             // Edit control (password field)
             let edit_hwnd = CreateWindowExW(
                 WS_EX_CLIENTEDGE,
                 U16CString::from_str("EDIT").unwrap().as_ptr(),
                 null_mut(),
                 WS_CHILD | WS_VISIBLE | ES_PASSWORD | ES_AUTOHSCROLL,
-                20, 45, 310, 24,
+                20,
+                45,
+                310,
+                24,
                 hwnd,
                 101,
                 hinstance,
                 null_mut(),
             );
             SendMessageW(edit_hwnd, WM_SETFONT, hfont, 1);
-            
+
             // OK button
             let ok_hwnd = CreateWindowExW(
                 0,
                 U16CString::from_str("BUTTON").unwrap().as_ptr(),
                 U16CString::from_str("Подтвердить").unwrap().as_ptr(),
                 WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-                120, 85, 100, 28,
+                120,
+                85,
+                100,
+                28,
                 hwnd,
                 1, // ID_OK
                 hinstance,
                 null_mut(),
             );
             SendMessageW(ok_hwnd, WM_SETFONT, hfont, 1);
-            
+
             // Cancel button
             let cancel_hwnd = CreateWindowExW(
                 0,
                 U16CString::from_str("BUTTON").unwrap().as_ptr(),
                 U16CString::from_str("Отмена").unwrap().as_ptr(),
                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                230, 85, 100, 28,
+                230,
+                85,
+                100,
+                28,
                 hwnd,
                 2, // ID_CANCEL
                 hinstance,
@@ -125,9 +137,9 @@ pub fn show_password_dialog(title: &str, prompt: &str) -> Option<String> {
     unsafe {
         PASSWORD_RESULT = None;
         IS_CONFIRMED = false;
-        
+
         let hinstance = GetModuleHandleW(null_mut());
-        
+
         let class_name = U16CString::from_str("OkoPasswordDialogClass").unwrap();
         let wnd_class = WNDCLASSW {
             style: CS_HREDRAW | CS_VREDRAW,
@@ -141,9 +153,9 @@ pub fn show_password_dialog(title: &str, prompt: &str) -> Option<String> {
             lpszMenuName: null_mut(),
             lpszClassName: class_name.as_ptr(),
         };
-        
+
         RegisterClassW(&wnd_class);
-        
+
         // Calculate centered position on screen
         let screen_width = GetSystemMetrics(SM_CXSCREEN);
         let screen_height = GetSystemMetrics(SM_CYSCREEN);
@@ -151,42 +163,45 @@ pub fn show_password_dialog(title: &str, prompt: &str) -> Option<String> {
         let height = 160;
         let x = (screen_width - width) / 2;
         let y = (screen_height - height) / 2;
-        
+
         let hwnd = CreateWindowExW(
             WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
             class_name.as_ptr(),
             U16CString::from_str(title).unwrap().as_ptr(),
             WS_POPUPWINDOW | WS_CAPTION | WS_VISIBLE,
-            x, y, width, height,
+            x,
+            y,
+            width,
+            height,
             0,
             0,
             hinstance,
             null_mut(),
         );
-        
+
         if hwnd == 0 {
             return None;
         }
-        
+
         // Set prompt text
         let prompt_hwnd = GetDlgItem(hwnd, 100);
         SetWindowTextW(prompt_hwnd, U16CString::from_str(prompt).unwrap().as_ptr());
-        
+
         // Focus the edit control
         let edit_hwnd = GetDlgItem(hwnd, 101);
         SetFocus(edit_hwnd);
-        
+
         // Show and update
         ShowWindow(hwnd, SW_SHOW);
         UpdateWindow(hwnd);
-        
+
         // Message loop
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, 0, 0, 0) != 0 {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
-        
+
         if IS_CONFIRMED {
             PASSWORD_RESULT.clone()
         } else {

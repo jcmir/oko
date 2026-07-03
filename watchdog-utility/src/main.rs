@@ -1,25 +1,23 @@
 #![windows_subsystem = "windows"]
 
+use chrono::Local;
 use std::ffi::OsStr;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::os::windows::ffi::OsStrExt;
 use std::ptr;
 use std::sync::Mutex;
-use tokio::sync::oneshot;
-use chrono::Local;
-use std::fs::OpenOptions;
-use std::io::Write;
-use tokio::net::windows::named_pipe::ClientOptions;
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::net::windows::named_pipe::ClientOptions;
+use tokio::sync::oneshot;
 use tokio::time::{timeout, Duration};
 
 use windows_sys::Win32::Foundation::*;
-use windows_sys::Win32::System::Services::*;
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
-use windows_sys::Win32::System::Threading::{
-    OpenProcess, TerminateProcess, PROCESS_TERMINATE
-};
+use windows_sys::Win32::System::Services::*;
+use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
 
 #[allow(non_camel_case_types)]
 type SC_HANDLE = isize;
@@ -46,12 +44,7 @@ fn log_to_file(message: &str) {
     let dir = r"C:\ProgramData\MonitoringControl";
     let _ = std::fs::create_dir_all(dir);
     let path = format!(r"{}\watchdog-utility.log", dir);
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(true)
-        .open(&path)
-    {
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
         let time_str = Local::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string();
         let _ = writeln!(file, "[{}] {}", time_str, message);
     }
@@ -64,12 +57,7 @@ fn log_event(level: &str, category: &str, message: &str) {
     let dir = r"C:\ProgramData\MonitoringControl";
     let _ = std::fs::create_dir_all(dir);
     let path = format!(r"{}\events.jsonl", dir);
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(true)
-        .open(&path)
-    {
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
         let time_str = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let log_line = format!(
             "{{\"timestamp\":\"{}\",\"level\":\"{}\",\"fields\":{{\"category\":\"{}\",\"message\":\"{}\"}}}}\n",
@@ -85,13 +73,17 @@ fn kill_core_process() {
         if snapshot == INVALID_HANDLE_VALUE {
             return;
         }
-        
+
         let mut entry: PROCESSENTRY32W = std::mem::zeroed();
         entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-        
+
         if Process32FirstW(snapshot, &mut entry) != 0 {
             loop {
-                let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+                let len = entry
+                    .szExeFile
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(entry.szExeFile.len());
                 let exe_name = String::from_utf16_lossy(&entry.szExeFile[..len]);
                 if exe_name.to_lowercase() == "core-service.exe" {
                     let process_handle = OpenProcess(PROCESS_TERMINATE, 0, entry.th32ProcessID);
@@ -114,7 +106,7 @@ fn restart_core_service() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    
+
     let last = LAST_RESTART.load(AtomicOrdering::SeqCst);
     if now - last < 8 {
         return;
@@ -125,7 +117,7 @@ fn restart_core_service() {
     log_event(
         "WARN",
         "watchdog_event",
-        "Watchdog triggered: CoreService stopped responding. Attempting restart..."
+        "Watchdog triggered: CoreService stopped responding. Attempting restart...",
     );
 
     // 1. Terminate any stuck core processes first
@@ -179,19 +171,19 @@ unsafe fn update_service_status(
     if SERVICE_STATUS_HANDLE == 0 {
         return;
     }
-    
+
     SERVICE_STATUS.dwCurrentState = current_state;
     SERVICE_STATUS.dwWin32ExitCode = exit_code;
     SERVICE_STATUS.dwServiceSpecificExitCode = service_specific_exit_code;
     SERVICE_STATUS.dwCheckPoint = check_point;
     SERVICE_STATUS.dwWaitHint = wait_hint;
-    
+
     if current_state == SERVICE_RUNNING {
         SERVICE_STATUS.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN;
     } else {
         SERVICE_STATUS.dwControlsAccepted = 0;
     }
-    
+
     SetServiceStatus(SERVICE_STATUS_HANDLE, std::ptr::addr_of!(SERVICE_STATUS));
 }
 
@@ -204,7 +196,7 @@ unsafe extern "system" fn service_ctrl_handler(
     match dw_control {
         SERVICE_CONTROL_STOP | SERVICE_CONTROL_SHUTDOWN => {
             update_service_status(SERVICE_STOP_PENDING, NO_ERROR, 0, 1, 3000);
-            
+
             if let Ok(mut guard) = SHUTDOWN_TX.lock() {
                 if let Some(tx) = guard.take() {
                     let _ = tx.send(());
@@ -222,20 +214,20 @@ unsafe extern "system" fn service_main(
     _lp_service_arg_vectors: *mut *mut u16,
 ) {
     let service_name = to_wide_string("WatchdogService");
-    
+
     SERVICE_STATUS_HANDLE = RegisterServiceCtrlHandlerExW(
         service_name.as_ptr(),
         Some(service_ctrl_handler),
         ptr::null(),
     );
-    
+
     if SERVICE_STATUS_HANDLE == 0 {
         log_to_file("Failed to register service control handler.");
         return;
     }
-    
+
     update_service_status(SERVICE_START_PENDING, NO_ERROR, 0, 1, 3000);
-    
+
     match run_watchdog_app() {
         Ok(_) => {
             update_service_status(SERVICE_STOPPED, NO_ERROR, 0, 0, 0);
@@ -251,7 +243,7 @@ fn run_watchdog_app() -> Result<(), anyhow::Error> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-        
+
     rt.block_on(async {
         let (tx, rx) = oneshot::channel::<()>();
         if let Ok(mut guard) = SHUTDOWN_TX.lock() {
@@ -326,7 +318,7 @@ fn run_watchdog_app() -> Result<(), anyhow::Error> {
             }
         }
     });
-    
+
     Ok(())
 }
 
@@ -345,7 +337,7 @@ unsafe fn set_service_recovery_options(service_handle: SC_HANDLE) -> Result<(), 
             Delay: 20000,
         },
     ];
-    
+
     let mut failure_actions = SERVICE_FAILURE_ACTIONSW {
         dwResetPeriod: 86400,
         lpRebootMsg: ptr::null_mut(),
@@ -353,38 +345,42 @@ unsafe fn set_service_recovery_options(service_handle: SC_HANDLE) -> Result<(), 
         cActions: actions.len() as u32,
         lpsaActions: actions.as_mut_ptr(),
     };
-    
+
     let res = ChangeServiceConfig2W(
         service_handle,
         SERVICE_CONFIG_FAILURE_ACTIONS,
         &mut failure_actions as *mut SERVICE_FAILURE_ACTIONSW as *mut std::ffi::c_void,
     );
-    
+
     if res == 0 {
-        return Err(anyhow::anyhow!("Failed to set failure actions: {}", GetLastError()));
+        return Err(anyhow::anyhow!(
+            "Failed to set failure actions: {}",
+            GetLastError()
+        ));
     }
-    
+
     Ok(())
 }
 
 fn install_service() -> Result<(), anyhow::Error> {
     let service_name = to_wide_string("WatchdogService");
     let display_name = to_wide_string("Watchdog Background Health-Checker Service");
-    
+
     let exe_path = std::env::current_exe()?;
-    let exe_path_str = exe_path.to_str().ok_or_else(|| anyhow::anyhow!("Invalid executable path"))?;
+    let exe_path_str = exe_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Invalid executable path"))?;
     let binary_path = to_wide_string(&format!("\"{}\"", exe_path_str));
 
     unsafe {
-        let sc_manager = OpenSCManagerW(
-            ptr::null(),
-            ptr::null(),
-            SC_MANAGER_ALL_ACCESS,
-        );
+        let sc_manager = OpenSCManagerW(ptr::null(), ptr::null(), SC_MANAGER_ALL_ACCESS);
         if sc_manager == 0 {
-            return Err(anyhow::anyhow!("Failed to open SC Manager: {}", GetLastError()));
+            return Err(anyhow::anyhow!(
+                "Failed to open SC Manager: {}",
+                GetLastError()
+            ));
         }
-        
+
         let service = CreateServiceW(
             sc_manager,
             service_name.as_ptr(),
@@ -400,7 +396,7 @@ fn install_service() -> Result<(), anyhow::Error> {
             ptr::null(),
             ptr::null(),
         );
-        
+
         if service == 0 {
             let err = GetLastError();
             CloseServiceHandle(sc_manager);
@@ -409,67 +405,65 @@ fn install_service() -> Result<(), anyhow::Error> {
             }
             return Err(anyhow::anyhow!("Failed to create service: {}", err));
         }
-        
+
         println!("Service installed successfully.");
-        
+
         if let Err(e) = set_service_recovery_options(service) {
-            println!("Warning: failed to configure service recovery options: {}", e);
+            println!(
+                "Warning: failed to configure service recovery options: {}",
+                e
+            );
         } else {
             println!("Service recovery options configured successfully (Auto-Restart on failure).");
         }
-        
+
         CloseServiceHandle(service);
         CloseServiceHandle(sc_manager);
     }
-    
+
     Ok(())
 }
 
 fn uninstall_service() -> Result<(), anyhow::Error> {
     let service_name = to_wide_string("WatchdogService");
-    
+
     unsafe {
-        let sc_manager = OpenSCManagerW(
-            ptr::null(),
-            ptr::null(),
-            SC_MANAGER_ALL_ACCESS,
-        );
+        let sc_manager = OpenSCManagerW(ptr::null(), ptr::null(), SC_MANAGER_ALL_ACCESS);
         if sc_manager == 0 {
-            return Err(anyhow::anyhow!("Failed to open SC Manager: {}", GetLastError()));
+            return Err(anyhow::anyhow!(
+                "Failed to open SC Manager: {}",
+                GetLastError()
+            ));
         }
-        
-        let service = OpenServiceW(
-            sc_manager,
-            service_name.as_ptr(),
-            SERVICE_ALL_ACCESS,
-        );
+
+        let service = OpenServiceW(sc_manager, service_name.as_ptr(), SERVICE_ALL_ACCESS);
         if service == 0 {
             CloseServiceHandle(sc_manager);
             return Err(anyhow::anyhow!("Service is not installed."));
         }
-        
+
         let mut status: SERVICE_STATUS = std::mem::zeroed();
         let _ = ControlService(service, SERVICE_CONTROL_STOP, &mut status);
-        
+
         let res = DeleteService(service);
         let err = GetLastError();
-        
+
         CloseServiceHandle(service);
         CloseServiceHandle(sc_manager);
-        
+
         if res == 0 {
             return Err(anyhow::anyhow!("Failed to delete service: {}", err));
         }
-        
+
         println!("Service deleted successfully.");
     }
-    
+
     Ok(())
 }
 
 fn main() -> Result<(), anyhow::Error> {
     let args: Vec<String> = std::env::args().collect();
-    
+
     if args.len() > 1 {
         match args[1].as_str() {
             "--install" => {
@@ -486,7 +480,7 @@ fn main() -> Result<(), anyhow::Error> {
             }
         }
     }
-    
+
     let service_name = to_wide_string("WatchdogService");
     let service_table = [
         SERVICE_TABLE_ENTRYW {
@@ -498,18 +492,21 @@ fn main() -> Result<(), anyhow::Error> {
             lpServiceProc: None,
         },
     ];
-    
+
     unsafe {
         if StartServiceCtrlDispatcherW(service_table.as_ptr()) == 0 {
             let err = GetLastError();
             if err == ERROR_FAILED_SERVICE_CONTROLLER_CONNECT {
                 run_watchdog_app()?;
             } else {
-                log_to_file(&format!("Failed to start service control dispatcher: {}.", err));
+                log_to_file(&format!(
+                    "Failed to start service control dispatcher: {}.",
+                    err
+                ));
                 return Err(anyhow::anyhow!("Failed to start service: {}", err));
             }
         }
     }
-    
+
     Ok(())
 }

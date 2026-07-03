@@ -1,6 +1,6 @@
 use tray_icon::{
-    menu::{Menu, MenuItem, PredefinedMenuItem, MenuId},
-    TrayIcon, TrayIconBuilder, Icon,
+    menu::{Menu, MenuId, MenuItem, PredefinedMenuItem},
+    Icon, TrayIcon, TrayIconBuilder,
 };
 
 pub struct SystemTray {
@@ -14,18 +14,18 @@ pub struct SystemTray {
 impl SystemTray {
     pub fn new(machine_id: &str) -> Self {
         let menu = Menu::new();
-        
+
         let status_item = MenuItem::new("Статус: Подключение...", false, None);
         let machine_item = MenuItem::new(format!("ID Машины: {}", machine_id), false, None);
-        
+
         let suspend_item = MenuItem::new("Приостановить защиту", true, None);
         let resume_item = MenuItem::new("Возобновить защиту", true, None);
         let quit_item = MenuItem::new("Выйти", true, None);
-        
+
         let suspend_id = suspend_item.id().clone();
         let resume_id = resume_item.id().clone();
         let quit_id = quit_item.id().clone();
-        
+
         menu.append_items(&[
             &status_item,
             &machine_item,
@@ -34,17 +34,18 @@ impl SystemTray {
             &resume_item,
             &PredefinedMenuItem::separator(),
             &quit_item,
-        ]).unwrap();
-        
+        ])
+        .unwrap();
+
         let initial_icon = Self::create_colored_icon(230, 50, 50); // Red / disconnected
-        
+
         let tray_icon = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_tooltip("Система защиты OKO")
             .with_icon(initial_icon)
             .build()
             .unwrap();
-            
+
         Self {
             _tray_icon: tray_icon,
             status_item,
@@ -53,29 +54,29 @@ impl SystemTray {
             quit_id,
         }
     }
-    
+
     pub fn update_status(&self, status: crate::client::SystemStatus) {
         use crate::client::SystemStatus;
-        
+
         let text = format!("Статус: {}", status.to_string_ru());
-        let _ = self.status_item.set_text(&text);
-        
+        self.status_item.set_text(&text);
+
         let icon = match status {
-            SystemStatus::Active => Self::create_colored_icon(0, 200, 80),      // Green
-            SystemStatus::Suspended => Self::create_colored_icon(240, 190, 0),  // Yellow
+            SystemStatus::Active => Self::create_colored_icon(0, 200, 80), // Green
+            SystemStatus::Suspended => Self::create_colored_icon(240, 190, 0), // Yellow
             SystemStatus::Disconnected => Self::create_colored_icon(230, 50, 50), // Red
         };
         let _ = self._tray_icon.set_icon(Some(icon));
     }
-    
+
     pub fn is_suspend_click(&self, id: &MenuId) -> bool {
         *id == self.suspend_id
     }
-    
+
     pub fn is_resume_click(&self, id: &MenuId) -> bool {
         *id == self.resume_id
     }
-    
+
     pub fn is_quit_click(&self, id: &MenuId) -> bool {
         *id == self.quit_id
     }
@@ -84,13 +85,13 @@ impl SystemTray {
         let width = 16;
         let height = 16;
         let mut rgba = vec![0u8; width * height * 4];
-        
+
         for y in 0..height {
             for x in 0..width {
                 let dx = (x as f32) - 7.5;
                 let dy = (y as f32) - 7.5;
                 let dist = (dx * dx + dy * dy).sqrt();
-                
+
                 let idx = (y * width + x) * 4;
                 if dist <= 6.5 {
                     // Inside circle
@@ -114,7 +115,7 @@ impl SystemTray {
                 }
             }
         }
-        
+
         Icon::from_rgba(rgba, width as u32, height as u32).unwrap()
     }
 }

@@ -3,24 +3,22 @@
 mod db;
 mod logger;
 
+use chrono::Local;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
-use chrono::Local;
 
 use windows_sys::Win32::Foundation::*;
-use windows_sys::Win32::System::Services::*;
 use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
 use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
-use windows_sys::Win32::System::Threading::{
-    OpenProcess, TerminateProcess, PROCESS_TERMINATE
-};
+use windows_sys::Win32::System::Services::*;
+use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
 
 const SDDL_REVISION_1: u32 = 1;
 
@@ -63,7 +61,7 @@ impl SecureSecurityAttributes {
         let sddl = to_wide_string("D:(A;;GA;;;SY)(A;;GA;;;BA)");
         let mut sd_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
         let mut sd_size: u32 = 0;
-        
+
         unsafe {
             let res = ConvertStringSecurityDescriptorToSecurityDescriptorW(
                 sddl.as_ptr(),
@@ -72,19 +70,22 @@ impl SecureSecurityAttributes {
                 &mut sd_size,
             );
             if res == 0 {
-                return Err(anyhow::anyhow!("Failed to convert SDDL to security descriptor: {}", GetLastError()));
+                return Err(anyhow::anyhow!(
+                    "Failed to convert SDDL to security descriptor: {}",
+                    GetLastError()
+                ));
             }
         }
-        
+
         let attrs = SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
             lpSecurityDescriptor: sd_ptr,
             bInheritHandle: 0,
         };
-        
+
         Ok(Self { attrs, sd_ptr })
     }
-    
+
     pub fn as_mut_ptr(&mut self) -> *mut SECURITY_ATTRIBUTES {
         &mut self.attrs
     }
@@ -110,19 +111,19 @@ unsafe fn update_service_status(
     if SERVICE_STATUS_HANDLE == 0 {
         return;
     }
-    
+
     SERVICE_STATUS.dwCurrentState = current_state;
     SERVICE_STATUS.dwWin32ExitCode = exit_code;
     SERVICE_STATUS.dwServiceSpecificExitCode = service_specific_exit_code;
     SERVICE_STATUS.dwCheckPoint = check_point;
     SERVICE_STATUS.dwWaitHint = wait_hint;
-    
+
     if current_state == SERVICE_RUNNING {
         SERVICE_STATUS.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN;
     } else {
         SERVICE_STATUS.dwControlsAccepted = 0;
     }
-    
+
     SetServiceStatus(SERVICE_STATUS_HANDLE, std::ptr::addr_of!(SERVICE_STATUS));
 }
 
@@ -135,7 +136,7 @@ unsafe extern "system" fn service_ctrl_handler(
     match dw_control {
         SERVICE_CONTROL_STOP | SERVICE_CONTROL_SHUTDOWN => {
             update_service_status(SERVICE_STOP_PENDING, NO_ERROR, 0, 1, 3000);
-            
+
             if let Ok(mut guard) = SHUTDOWN_TX.lock() {
                 if let Some(tx) = guard.take() {
                     let _ = tx.send(());
@@ -153,19 +154,19 @@ unsafe extern "system" fn service_main(
     _lp_service_arg_vectors: *mut *mut u16,
 ) {
     let service_name = to_wide_string("CoreService");
-    
+
     SERVICE_STATUS_HANDLE = RegisterServiceCtrlHandlerExW(
         service_name.as_ptr(),
         Some(service_ctrl_handler),
         ptr::null(),
     );
-    
+
     if SERVICE_STATUS_HANDLE == 0 {
         return;
     }
-    
+
     update_service_status(SERVICE_START_PENDING, NO_ERROR, 0, 1, 3000);
-    
+
     match run_core_app() {
         Ok(_) => {
             update_service_status(SERVICE_STOPPED, NO_ERROR, 0, 0, 0);
@@ -179,7 +180,7 @@ unsafe extern "system" fn service_main(
 
 async fn check_master_password_override(db: Arc<db::Db>) {
     let pipe_name = r"\\.\pipe\CoreAdminPipe";
-    
+
     loop {
         let server_res = {
             match SecureSecurityAttributes::new() {
@@ -196,8 +197,12 @@ async fn check_master_password_override(db: Arc<db::Db>) {
                     }
                 }
                 Err(e) => {
-                    tracing::error!(category = "security_error", "Failed to generate security attributes for Admin Pipe: {}", e);
-                    Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                    tracing::error!(
+                        category = "security_error",
+                        "Failed to generate security attributes for Admin Pipe: {}",
+                        e
+                    );
+                    Err(std::io::Error::other(e.to_string()))
                 }
             }
         };
@@ -206,7 +211,11 @@ async fn check_master_password_override(db: Arc<db::Db>) {
             Ok(s) => s,
             Err(e) => {
                 // Pipe might be occupied or failed to create
-                tracing::warn!(category = "ipc_error", "Failed to create Admin Named Pipe: {}. Retrying in 2 seconds...", e);
+                tracing::warn!(
+                    category = "ipc_error",
+                    "Failed to create Admin Named Pipe: {}. Retrying in 2 seconds...",
+                    e
+                );
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                 continue;
             }
@@ -227,11 +236,14 @@ async fn check_master_password_override(db: Arc<db::Db>) {
             Ok(_) => {
                 let input = line.trim();
                 if input == "STATUS" {
-                    let state_str = if SUSPENDED.load(Ordering::SeqCst) { "Suspended" } else { "Active" };
+                    let state_str = if SUSPENDED.load(Ordering::SeqCst) {
+                        "Suspended"
+                    } else {
+                        "Active"
+                    };
                     let response = format!("STATE: {}\n", state_str);
                     let _ = reader.get_mut().write_all(response.as_bytes()).await;
-                } else if input.starts_with("SUSPEND ") {
-                    let password = &input["SUSPEND ".len()..];
+                } else if let Some(password) = input.strip_prefix("SUSPEND ") {
                     if db.verify_password(password) {
                         SUSPENDED.store(true, Ordering::SeqCst);
                         tracing::warn!(
@@ -244,10 +256,12 @@ async fn check_master_password_override(db: Arc<db::Db>) {
                             category = "unauthorized_access",
                             "Invalid password for SUSPEND command."
                         );
-                        let _ = reader.get_mut().write_all(b"ERROR: Invalid password\n").await;
+                        let _ = reader
+                            .get_mut()
+                            .write_all(b"ERROR: Invalid password\n")
+                            .await;
                     }
-                } else if input.starts_with("RESUME ") {
-                    let password = &input["RESUME ".len()..];
+                } else if let Some(password) = input.strip_prefix("RESUME ") {
                     if db.verify_password(password) {
                         SUSPENDED.store(false, Ordering::SeqCst);
                         tracing::warn!(
@@ -260,10 +274,12 @@ async fn check_master_password_override(db: Arc<db::Db>) {
                             category = "unauthorized_access",
                             "Invalid password for RESUME command."
                         );
-                        let _ = reader.get_mut().write_all(b"ERROR: Invalid password\n").await;
+                        let _ = reader
+                            .get_mut()
+                            .write_all(b"ERROR: Invalid password\n")
+                            .await;
                     }
-                } else if input.starts_with("ADD_BLOCK ") {
-                    let rem = &input["ADD_BLOCK ".len()..];
+                } else if let Some(rem) = input.strip_prefix("ADD_BLOCK ") {
                     let parts: Vec<&str> = rem.splitn(2, ' ').collect();
                     if parts.len() == 2 {
                         let password = parts[0];
@@ -284,14 +300,19 @@ async fn check_master_password_override(db: Arc<db::Db>) {
                                 }
                             }
                         } else {
-                            tracing::error!(category = "unauthorized_access", "Invalid password for ADD_BLOCK command.");
-                            let _ = reader.get_mut().write_all(b"ERROR: Invalid password\n").await;
+                            tracing::error!(
+                                category = "unauthorized_access",
+                                "Invalid password for ADD_BLOCK command."
+                            );
+                            let _ = reader
+                                .get_mut()
+                                .write_all(b"ERROR: Invalid password\n")
+                                .await;
                         }
                     } else {
                         let _ = reader.get_mut().write_all(b"ERROR: Invalid format. Expected: ADD_BLOCK <password> <process_name>\n").await;
                     }
-                } else if input.starts_with("REMOVE_BLOCK ") {
-                    let rem = &input["REMOVE_BLOCK ".len()..];
+                } else if let Some(rem) = input.strip_prefix("REMOVE_BLOCK ") {
                     let parts: Vec<&str> = rem.splitn(2, ' ').collect();
                     if parts.len() == 2 {
                         let password = parts[0];
@@ -312,21 +333,34 @@ async fn check_master_password_override(db: Arc<db::Db>) {
                                 }
                             }
                         } else {
-                            tracing::error!(category = "unauthorized_access", "Invalid password for REMOVE_BLOCK command.");
-                            let _ = reader.get_mut().write_all(b"ERROR: Invalid password\n").await;
+                            tracing::error!(
+                                category = "unauthorized_access",
+                                "Invalid password for REMOVE_BLOCK command."
+                            );
+                            let _ = reader
+                                .get_mut()
+                                .write_all(b"ERROR: Invalid password\n")
+                                .await;
                         }
                     } else {
                         let _ = reader.get_mut().write_all(b"ERROR: Invalid format. Expected: REMOVE_BLOCK <password> <process_name>\n").await;
                     }
                 } else {
-                    let _ = reader.get_mut().write_all(b"ERROR: Unknown command\n").await;
+                    let _ = reader
+                        .get_mut()
+                        .write_all(b"ERROR: Unknown command\n")
+                        .await;
                 }
             }
             Err(e) => {
-                tracing::error!(category = "ipc_error", "Error reading from Admin Named Pipe: {}", e);
+                tracing::error!(
+                    category = "ipc_error",
+                    "Error reading from Admin Named Pipe: {}",
+                    e
+                );
             }
         }
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     }
 }
@@ -334,11 +368,11 @@ async fn check_master_password_override(db: Arc<db::Db>) {
 fn run_core_app() -> Result<(), anyhow::Error> {
     // Initialize standard tracing logger
     logger::init_logger()?;
-    
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-        
+
     rt.block_on(async {
         let (tx, rx) = oneshot::channel::<()>();
         if let Ok(mut guard) = SHUTDOWN_TX.lock() {
@@ -391,7 +425,7 @@ fn run_core_app() -> Result<(), anyhow::Error> {
                         }
                         Err(e) => {
                             tracing::error!(category = "security_error", "Error generating security attributes: {}", e);
-                            Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                            Err(std::io::Error::other(e.to_string()))
                         }
                     }
                 };
@@ -419,7 +453,7 @@ fn run_core_app() -> Result<(), anyhow::Error> {
                     let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string();
                     let signal = format!("HEARTBEAT {}\n", timestamp);
                     
-                    if let Err(_) = server.write_all(signal.as_bytes()).await {
+                    if server.write_all(signal.as_bytes()).await.is_err() {
                         tracing::warn!(category = "ipc_event", "Failed to write heartbeat to pipe (Watchdog disconnected)");
                         break;
                     }
@@ -442,7 +476,7 @@ fn run_core_app() -> Result<(), anyhow::Error> {
             }
         }
     });
-    
+
     Ok(())
 }
 
@@ -461,7 +495,7 @@ unsafe fn set_service_recovery_options(service_handle: SC_HANDLE) -> Result<(), 
             Delay: 20000,
         },
     ];
-    
+
     let mut failure_actions = SERVICE_FAILURE_ACTIONSW {
         dwResetPeriod: 86400,
         lpRebootMsg: ptr::null_mut(),
@@ -469,38 +503,42 @@ unsafe fn set_service_recovery_options(service_handle: SC_HANDLE) -> Result<(), 
         cActions: actions.len() as u32,
         lpsaActions: actions.as_mut_ptr(),
     };
-    
+
     let res = ChangeServiceConfig2W(
         service_handle,
         SERVICE_CONFIG_FAILURE_ACTIONS,
         &mut failure_actions as *mut SERVICE_FAILURE_ACTIONSW as *mut std::ffi::c_void,
     );
-    
+
     if res == 0 {
-        return Err(anyhow::anyhow!("Failed to set failure actions: {}", GetLastError()));
+        return Err(anyhow::anyhow!(
+            "Failed to set failure actions: {}",
+            GetLastError()
+        ));
     }
-    
+
     Ok(())
 }
 
 fn install_service() -> Result<(), anyhow::Error> {
     let service_name = to_wide_string("CoreService");
     let display_name = to_wide_string("Core Background Monitoring Service");
-    
+
     let exe_path = std::env::current_exe()?;
-    let exe_path_str = exe_path.to_str().ok_or_else(|| anyhow::anyhow!("Invalid executable path"))?;
+    let exe_path_str = exe_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Invalid executable path"))?;
     let binary_path = to_wide_string(&format!("\"{}\"", exe_path_str));
 
     unsafe {
-        let sc_manager = OpenSCManagerW(
-            ptr::null(),
-            ptr::null(),
-            SC_MANAGER_ALL_ACCESS,
-        );
+        let sc_manager = OpenSCManagerW(ptr::null(), ptr::null(), SC_MANAGER_ALL_ACCESS);
         if sc_manager == 0 {
-            return Err(anyhow::anyhow!("Failed to open SC Manager: {}", GetLastError()));
+            return Err(anyhow::anyhow!(
+                "Failed to open SC Manager: {}",
+                GetLastError()
+            ));
         }
-        
+
         let service = CreateServiceW(
             sc_manager,
             service_name.as_ptr(),
@@ -516,7 +554,7 @@ fn install_service() -> Result<(), anyhow::Error> {
             ptr::null(),
             ptr::null(),
         );
-        
+
         if service == 0 {
             let err = GetLastError();
             CloseServiceHandle(sc_manager);
@@ -525,95 +563,88 @@ fn install_service() -> Result<(), anyhow::Error> {
             }
             return Err(anyhow::anyhow!("Failed to create service: {}", err));
         }
-        
+
         println!("Service installed successfully.");
-        
+
         if let Err(e) = set_service_recovery_options(service) {
-            println!("Warning: failed to configure service recovery options: {}", e);
+            println!(
+                "Warning: failed to configure service recovery options: {}",
+                e
+            );
         } else {
             println!("Service recovery options configured successfully (Auto-Restart on failure).");
         }
-        
+
         CloseServiceHandle(service);
         CloseServiceHandle(sc_manager);
     }
-    
+
     Ok(())
 }
 
 fn uninstall_service() -> Result<(), anyhow::Error> {
     let service_name = to_wide_string("CoreService");
-    
+
     unsafe {
-        let sc_manager = OpenSCManagerW(
-            ptr::null(),
-            ptr::null(),
-            SC_MANAGER_ALL_ACCESS,
-        );
+        let sc_manager = OpenSCManagerW(ptr::null(), ptr::null(), SC_MANAGER_ALL_ACCESS);
         if sc_manager == 0 {
-            return Err(anyhow::anyhow!("Failed to open SC Manager: {}", GetLastError()));
+            return Err(anyhow::anyhow!(
+                "Failed to open SC Manager: {}",
+                GetLastError()
+            ));
         }
-        
-        let service = OpenServiceW(
-            sc_manager,
-            service_name.as_ptr(),
-            SERVICE_ALL_ACCESS,
-        );
+
+        let service = OpenServiceW(sc_manager, service_name.as_ptr(), SERVICE_ALL_ACCESS);
         if service == 0 {
             CloseServiceHandle(sc_manager);
             return Err(anyhow::anyhow!("Service is not installed."));
         }
-        
+
         let mut status: SERVICE_STATUS = std::mem::zeroed();
         let _ = ControlService(service, SERVICE_CONTROL_STOP, &mut status);
-        
+
         let res = DeleteService(service);
         let err = GetLastError();
-        
+
         CloseServiceHandle(service);
         CloseServiceHandle(sc_manager);
-        
+
         if res == 0 {
             return Err(anyhow::anyhow!("Failed to delete service: {}", err));
         }
-        
+
         println!("Service deleted successfully.");
     }
-    
+
     Ok(())
 }
 
 fn configure_service_recovery_only() -> Result<(), anyhow::Error> {
     let service_name = to_wide_string("CoreService");
-    
+
     unsafe {
-        let sc_manager = OpenSCManagerW(
-            ptr::null(),
-            ptr::null(),
-            SC_MANAGER_ALL_ACCESS,
-        );
+        let sc_manager = OpenSCManagerW(ptr::null(), ptr::null(), SC_MANAGER_ALL_ACCESS);
         if sc_manager == 0 {
-            return Err(anyhow::anyhow!("Failed to open SC Manager: {}", GetLastError()));
+            return Err(anyhow::anyhow!(
+                "Failed to open SC Manager: {}",
+                GetLastError()
+            ));
         }
-        
-        let service = OpenServiceW(
-            sc_manager,
-            service_name.as_ptr(),
-            SERVICE_ALL_ACCESS,
-        );
+
+        let service = OpenServiceW(sc_manager, service_name.as_ptr(), SERVICE_ALL_ACCESS);
         if service == 0 {
             let err = GetLastError();
             CloseServiceHandle(sc_manager);
             return Err(anyhow::anyhow!("Failed to open service: {}", err));
         }
-        
+
         set_service_recovery_options(service)?;
         println!("Service recovery options configured successfully.");
-        
+
         CloseServiceHandle(service);
         CloseServiceHandle(sc_manager);
     }
-    
+
     Ok(())
 }
 
@@ -626,7 +657,7 @@ fn set_password_in_db(password: &str) -> Result<(), anyhow::Error> {
 
 fn main() -> Result<(), anyhow::Error> {
     let args: Vec<String> = std::env::args().collect();
-    
+
     if args.len() > 1 {
         match args[1].as_str() {
             "--install" => {
@@ -655,7 +686,7 @@ fn main() -> Result<(), anyhow::Error> {
             }
         }
     }
-    
+
     let service_name = to_wide_string("CoreService");
     let service_table = [
         SERVICE_TABLE_ENTRYW {
@@ -667,7 +698,7 @@ fn main() -> Result<(), anyhow::Error> {
             lpServiceProc: None,
         },
     ];
-    
+
     unsafe {
         if StartServiceCtrlDispatcherW(service_table.as_ptr()) == 0 {
             let err = GetLastError();
@@ -678,7 +709,7 @@ fn main() -> Result<(), anyhow::Error> {
             }
         }
     }
-    
+
     Ok(())
 }
 
@@ -690,26 +721,38 @@ fn check_and_block_processes(db: &db::Db) {
     let blocked_names = match db.get_blocked_processes() {
         Ok(list) => list,
         Err(e) => {
-            tracing::error!(category = "database_error", "Failed to query blocked processes: {}", e);
-            vec!["calc.exe".to_string(), "notepad.exe".to_string(), "mspaint.exe".to_string()]
+            tracing::error!(
+                category = "database_error",
+                "Failed to query blocked processes: {}",
+                e
+            );
+            vec![
+                "calc.exe".to_string(),
+                "notepad.exe".to_string(),
+                "mspaint.exe".to_string(),
+            ]
         }
     };
-    
+
     unsafe {
         let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if snapshot == INVALID_HANDLE_VALUE {
             return;
         }
-        
+
         let mut entry: PROCESSENTRY32W = std::mem::zeroed();
         entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-        
+
         if Process32FirstW(snapshot, &mut entry) != 0 {
             loop {
-                let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+                let len = entry
+                    .szExeFile
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(entry.szExeFile.len());
                 let exe_name = String::from_utf16_lossy(&entry.szExeFile[..len]);
                 let exe_name_lower = exe_name.to_lowercase();
-                
+
                 for blocked in &blocked_names {
                     if exe_name_lower == *blocked {
                         let process_handle = OpenProcess(PROCESS_TERMINATE, 0, entry.th32ProcessID);
@@ -726,7 +769,7 @@ fn check_and_block_processes(db: &db::Db) {
                         }
                     }
                 }
-                
+
                 if Process32NextW(snapshot, &mut entry) == 0 {
                     break;
                 }

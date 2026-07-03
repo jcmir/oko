@@ -1,0 +1,25 @@
+[package]
+name = "core-service"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+chrono = "0.4"
+tokio = { version = "1", features = ["rt-multi-thread", "time", "net", "io-util", "macros", "sync"] }
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_Services",
+    "Win32_System_SystemServices",
+    "Win32_System_Pipes",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Threading"
+] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+sha2 = "0.10"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json"] }
+lazy_static = "1.5.0"
